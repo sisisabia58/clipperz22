@@ -19,6 +19,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
+from compute import compute_backend, should_dispatch_to_modal, whisper_runtime
 from yt_dlp import YoutubeDL
 
 
@@ -389,6 +390,64 @@ def build_clipper_command(request: ClipJobRequest) -> list[str]:
     return command
 
 
+def finish_job(job_id: str, request: ClipJobRequest, started_at: float, logs: list[str], error: str | None = None) -> None:
+    clips = discover_clips(started_at)
+    candidates = discover_candidates(started_at)
+    if error:
+        set_job(
+            job_id,
+            status="failed",
+            clips=clips,
+            candidates=candidates,
+            logs=logs[-120:],
+            error=error,
+        )
+    else:
+        updates = {"status": "completed", "logs": logs[-120:]}
+        if clips:
+            updates["clips"] = clips
+        if candidates:
+            updates["candidates"] = candidates
+        set_job(job_id, **updates)
+
+    job_secrets.pop(job_id, None)
+    if request.source_file:
+        upload_path = resolve_upload_path(request.source_file)
+        if upload_path is None:
+            source = Path(request.source_file)
+            if source.is_file() and source.parent.resolve() == UPLOADS_DIR.resolve():
+                upload_path = source
+        if upload_path is not None:
+            try:
+                upload_path.unlink()
+            except OSError:
+                pass
+
+
+def run_job_on_modal(job_id: str, request: ClipJobRequest, started_at: float) -> None:
+    from modal_client import ModalGPUClient, ModalGPUError
+
+    logs = ["Dispatching transcription, encoding, and clip export to Modal GPU..."]
+    set_job(job_id, logs=logs)
+    try:
+        client = ModalGPUClient.from_env()
+        logs.append(f"Modal GPU endpoint: {client.base_url}")
+        set_job(job_id, logs=logs)
+        source_bytes = None
+        payload = request.model_dump()
+        if request.source_file:
+            source_path = Path(request.source_file)
+            if source_path.is_file():
+                source_bytes = source_path.read_bytes()
+                payload["source_file"] = source_path.name
+        client.run_job(payload, OUTPUTS_DIR, source_bytes=source_bytes)
+        logs.append("Modal GPU job finished.")
+        finish_job(job_id, request, started_at, logs)
+    except (ModalGPUError, OSError, ValueError) as exc:
+        logs.append(str(exc))
+        finish_job(job_id, request, started_at, logs, error=str(exc))
+
+
 def run_job(job_id: str) -> None:
     with jobs_lock:
         request = jobs[job_id].request
@@ -399,6 +458,11 @@ def run_job(job_id: str) -> None:
 
     started_at = time.time()
     set_job(job_id, status="running", error=None)
+
+    if should_dispatch_to_modal():
+        run_job_on_modal(job_id, request, started_at)
+        return
+
     command = build_clipper_command(request)
 
     process = subprocess.Popen(
@@ -421,40 +485,19 @@ def run_job(job_id: str) -> None:
             set_job(job_id, logs=logs[-120:])
 
     code = process.wait()
-    clips = discover_clips(started_at)
-    candidates = discover_candidates(started_at)
-    if code == 0:
-        updates = {"status": "completed", "logs": logs[-120:]}
-        if clips:
-            updates["clips"] = clips
-        if candidates:
-            updates["candidates"] = candidates
-        set_job(job_id, **updates)
-    else:
-        set_job(
-            job_id,
-            status="failed",
-            clips=clips,
-            candidates=candidates,
-            logs=logs[-120:],
-            error=f"clipper.py exited with code {code}",
-        )
-    job_secrets.pop(job_id, None)
-
-    # An uploaded source is only needed during processing; remove it afterwards
-    # so large videos don't accumulate in uploads/.
-    if request.source_file:
-        upload_path = resolve_upload_path(request.source_file)
-        if upload_path is not None:
-            try:
-                upload_path.unlink()
-            except OSError:
-                pass
+    error = None if code == 0 else f"clipper.py exited with code {code}"
+    finish_job(job_id, request, started_at, logs, error=error)
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, str | dict[str, str]]:
+    device, compute_type = whisper_runtime()
+    return {
+        "status": "ok",
+        "compute": compute_backend(),
+        "whisper": {"device": device, "compute_type": compute_type},
+        "video_encoder": os.environ.get("CLIPFORGE_VIDEO_ENCODER", "libx264"),
+    }
 
 
 class ModelsQuery(BaseModel):

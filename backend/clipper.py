@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -16,6 +18,7 @@ from rich.table import Table
 from slugify import slugify
 from yt_dlp import YoutubeDL
 
+from compute import video_encoder_args, whisper_runtime
 from llm import AIConfig, chat_completion, extract_json
 
 
@@ -110,6 +113,13 @@ def run(command: list[str], cwd: Path | None = None) -> None:
 
 
 def ffmpeg_path() -> str:
+    override = os.environ.get("CLIPFORGE_FFMPEG")
+    if override:
+        return override
+    if os.environ.get("CLIPFORGE_PREFER_SYSTEM_FFMPEG", "0") == "1":
+        system = shutil.which("ffmpeg")
+        if system:
+            return system
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
@@ -515,8 +525,9 @@ def transcribe(audio_path: Path, transcript_path: Path, model_name: str, languag
 
     from faster_whisper import WhisperModel
 
-    console.print(f"[bold]Loading model:[/bold] {model_name}")
-    model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    device, compute_type = whisper_runtime()
+    console.print(f"[bold]Loading model:[/bold] {model_name} ({device}/{compute_type})")
+    model = WhisperModel(model_name, device=device, compute_type=compute_type)
     segments, info = model.transcribe(
         str(audio_path),
         language=language,
@@ -1067,16 +1078,11 @@ def export_clip(
             "-an",
             "-vf",
             vf,
-            "-c:v",
-            "libx264",
+            *video_encoder_args(),
             "-profile:v",
             "baseline",
             "-level",
             "4.0",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "18",
             "-pix_fmt",
             "yuv420p",
             str(temp_video_path.name),

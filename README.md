@@ -98,8 +98,54 @@ GET    /outputs/<generated-file>
 | `DATA_DIR` | Backend | Jobs, uploads, and outputs directory |
 | `CORS_ORIGINS` | Backend | Comma-separated origins, or `*` in Docker |
 | `IN_DOCKER` | Backend | Rewrites `localhost` LLM URLs to `host.docker.internal` |
+| `CLIPFORGE_COMPUTE` | Backend | `modal` (default) or `local` |
+| `MODAL_GPU_BASE_URL` | Backend | Deployed Modal GPU web URL |
+| `MODAL_PROXY_KEY` / `MODAL_PROXY_SECRET` | Backend | Modal proxy auth for GPU endpoints |
+| `CLIPFORGE_WHISPER_DEVICE` | GPU worker | `cuda` on Modal, `cpu` locally |
+| `CLIPFORGE_VIDEO_ENCODER` | GPU worker | `h264_nvenc` on Modal, `libx264` locally |
 
 The first Whisper run downloads a model (default `Systran/faster-whisper-small`). Use `Systran/faster-whisper-base` if CPU is tight.
+
+## Modal GPU (transcription and encoding)
+
+ClipForge sends transcription, video encoding, face-aware crop, and clip export to **Modal GPU endpoints** instead of the local CPU. The Docker web app stays on CPU and calls those endpoints.
+
+1. Install and log in to Modal:
+
+```bash
+pip install modal
+modal setup
+```
+
+2. Deploy the GPU workers from this repo:
+
+```bash
+modal deploy backend/modal_app.py
+```
+
+3. Copy the printed `*.modal.run` URL into `.env`:
+
+```env
+CLIPFORGE_COMPUTE=modal
+MODAL_GPU_BASE_URL=https://YOUR_WORKSPACE--clipforge-gpu-web.modal.run
+MODAL_PROXY_KEY=wk-...
+MODAL_PROXY_SECRET=ws-...
+```
+
+4. Restart Compose. `GET /api/health` should report `"compute": "modal"`.
+
+Endpoints on the GPU app:
+
+| Path | Role |
+| --- | --- |
+| `GET /health` | GPU worker health |
+| `POST /transcribe` | faster-whisper on CUDA (`float16`) |
+| `POST /encode` | vertical clip encode (`h264_nvenc` when available, else `libx264`) |
+| `POST /jobs` | full download → transcribe → score → export pipeline |
+
+If `MODAL_GPU_BASE_URL` is empty, the backend **falls back to local CPU** so the UI still runs without Modal credentials. Set `CLIPFORGE_COMPUTE=local` to force that path.
+
+On the GPU worker, Whisper uses `device=cuda` and FFmpeg prefers NVENC. Face/person crop and subtitle burn run in the same Modal job.
 
 ## Safety and legal notes
 
@@ -111,6 +157,7 @@ Do not expose the backend publicly without authentication, rate limits, request 
 
 ```text
 backend/          FastAPI + clipper pipeline
+backend/modal_app.py  Modal GPU endpoints (Whisper + NVENC + full jobs)
 frontend/         Next.js UI
 gateway/          nginx reverse proxy
 docker-compose.yml

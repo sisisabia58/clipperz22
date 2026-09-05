@@ -7,6 +7,12 @@ services:
       IN_DOCKER: "1"
       DATA_DIR: /app/data
       CORS_ORIGINS: "*"
+      CLIPFORGE_COMPUTE: ${CLIPFORGE_COMPUTE:-modal}
+      MODAL_GPU_BASE_URL: ${MODAL_GPU_BASE_URL:-}
+      MODAL_PROXY_KEY: ${MODAL_PROXY_KEY:-}
+      MODAL_PROXY_SECRET: ${MODAL_PROXY_SECRET:-}
+      MODAL_TOKEN_ID: ${MODAL_TOKEN_ID:-}
+      MODAL_TOKEN_SECRET: ${MODAL_TOKEN_SECRET:-}
     volumes:
       - clipforge-data:/app/data
       - clipforge-models:/root/.cache

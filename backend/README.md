@@ -78,9 +78,11 @@ Default output video:
 
 If CPU feels too slow, use a smaller model:
 
-```powershell
-.\.venv\Scripts\python.exe clipper.py "URL" --model Systran/faster-whisper-base
+```bash
+python clipper.py "URL" --model Systran/faster-whisper-base
 ```
+
+Production jobs should run on Modal GPU instead. Deploy `modal_app.py` and set `MODAL_GPU_BASE_URL` on the API. See the root README.
 
 ## Notes
 
