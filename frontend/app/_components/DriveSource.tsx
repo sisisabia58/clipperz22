@@ -1,3 +1,5 @@
+"use client";
+
 import { HardDrive, Loader2, RefreshCw } from "lucide-react";
 import type { DriveFile, DriveStatus } from "../../lib/apiClient";
 
@@ -37,7 +39,7 @@ export function DriveSource({
   if (!status?.configured) {
     return (
       <div className="driveBlock">
-        <p className="field-help">
+        <p className="error">
           Set <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> on the backend, then
           restart ClipForge to connect Google Drive.
         </p>

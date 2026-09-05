@@ -216,6 +216,8 @@ h2 {
 }
 
 .segmentedControl {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
@@ -225,7 +227,8 @@ h2 {
   border-radius: var(--radius-sm);
 }
 
-.segmentedControl button {
+.segmentedControl button,
+.segmentedControl label {
   min-height: 38px;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -236,24 +239,47 @@ h2 {
   font-weight: 700;
 }
 
-.segmentedControl button:hover {
+.segmentedControl label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.segmentedControl input[type="radio"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.segmentedControl svg {
+  pointer-events: none;
+}
+
+.segmentedControl button:hover,
+.segmentedControl label:hover {
   background: rgba(255, 255, 255, 0.65);
   color: var(--text-primary);
 }
 
-.segmentedControl button:focus-visible {
+.segmentedControl button:focus-visible,
+.segmentedControl label:focus-within {
   outline: 2px solid rgba(37, 99, 235, 0.35);
   outline-offset: 2px;
 }
 
-.segmentedControl button.active {
+.segmentedControl button.active,
+.segmentedControl label.active {
   background: linear-gradient(180deg, #60A5FA 0%, #3B82F6 100%);
   border-color: #3B82F6;
   color: #FFFFFF;
   box-shadow: 0 4px 10px rgba(37, 99, 235, 0.18);
 }
 
-.segmentedControl button.active:hover {
+.segmentedControl button.active:hover,
+.segmentedControl label.active:hover {
   background: linear-gradient(180deg, #3B82F6 0%, var(--primary) 100%);
   border-color: var(--primary);
   color: #FFFFFF;

@@ -1,3 +1,5 @@
+"use client";
+
 import { HardDrive, Link2, Loader2, Play, RefreshCw, Scissors, Sparkles, Type, Upload } from "lucide-react";
 import { CAPTION_FONT_SIZE_MAX, CAPTION_FONT_SIZE_MIN, CAPTION_FONTS } from "../../lib/constants";
 import type { DriveFile, DriveStatus } from "../../lib/apiClient";
@@ -171,28 +173,26 @@ export function ControlPanel({
 
       <div className="segmentedField">
         <span>Sumber Video</span>
-        <div className="segmentedControl segmentedControl--three" role="group" aria-label="Sumber video">
-          <button
-            className={sourceMode === "url" ? "active" : ""}
-            type="button"
-            onClick={() => onSourceModeChange("url")}
-          >
-            <Link2 size={15} /> YouTube
-          </button>
-          <button
-            className={sourceMode === "upload" ? "active" : ""}
-            type="button"
-            onClick={() => onSourceModeChange("upload")}
-          >
-            <Upload size={15} /> Upload
-          </button>
-          <button
-            className={sourceMode === "gdrive" ? "active" : ""}
-            type="button"
-            onClick={() => onSourceModeChange("gdrive")}
-          >
-            <HardDrive size={15} /> Drive
-          </button>
+        <div className="segmentedControl segmentedControl--three" role="radiogroup" aria-label="Sumber video">
+          {(
+            [
+              ["url", "YouTube", Link2],
+              ["upload", "Upload", Upload],
+              ["gdrive", "Drive", HardDrive],
+            ] as const
+          ).map(([mode, label, Icon]) => (
+            <label key={mode} className={sourceMode === mode ? "active" : ""}>
+              <input
+                type="radio"
+                name="clipforge-source"
+                value={mode}
+                checked={sourceMode === mode}
+                onChange={() => onSourceModeChange(mode)}
+              />
+              <Icon size={15} aria-hidden="true" />
+              {label}
+            </label>
+          ))}
         </div>
       </div>
 
