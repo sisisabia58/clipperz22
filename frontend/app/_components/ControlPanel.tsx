@@ -1,7 +1,9 @@
-import { Link2, Loader2, Play, RefreshCw, Scissors, Sparkles, Type, Upload } from "lucide-react";
+import { HardDrive, Link2, Loader2, Play, RefreshCw, Scissors, Sparkles, Type, Upload } from "lucide-react";
 import { CAPTION_FONT_SIZE_MAX, CAPTION_FONT_SIZE_MIN, CAPTION_FONTS } from "../../lib/constants";
+import type { DriveFile, DriveStatus } from "../../lib/apiClient";
 import type { CamCorner, CaptionFont, CaptionPosition, CropMode, SourceMode } from "../../types/clip.type";
 import { CaptionPreview } from "./CaptionPreview";
+import { DriveSource } from "./DriveSource";
 
 const CAM_CORNER_OPTIONS: { value: CamCorner; label: string }[] = [
   { value: "auto", label: "Auto" },
@@ -63,6 +65,20 @@ type ControlPanelProps = {
   onStartJob: () => void;
   onUrlChange: (value: string) => void;
   url: string;
+  driveStatus: DriveStatus | null;
+  driveFiles: DriveFile[];
+  driveFolders: DriveFile[];
+  selectedDriveFileId: string;
+  selectedDriveFolderId: string;
+  driveAutoUpload: boolean;
+  isDriveLoading: boolean;
+  isDriveConnecting: boolean;
+  onConnectDrive: () => void;
+  onDisconnectDrive: () => void;
+  onRefreshDrive: () => void;
+  onSelectDriveFile: (fileId: string) => void;
+  onSelectDriveFolder: (folderId: string, folderName: string) => void;
+  onDriveAutoUploadChange: (value: boolean) => void;
 };
 
 export function ControlPanel({
@@ -117,9 +133,33 @@ export function ControlPanel({
   onStartJob,
   onUrlChange,
   url,
+  driveStatus,
+  driveFiles,
+  driveFolders,
+  selectedDriveFileId,
+  selectedDriveFolderId,
+  driveAutoUpload,
+  isDriveLoading,
+  isDriveConnecting,
+  onConnectDrive,
+  onDisconnectDrive,
+  onRefreshDrive,
+  onSelectDriveFile,
+  onSelectDriveFolder,
+  onDriveAutoUploadChange,
 }: ControlPanelProps) {
-  const hasSource = sourceMode === "url" ? Boolean(url.trim()) : Boolean(uploadFileName);
-  const isStartDisabled = isSubmitting || isBusy || isUploading || !hasSource;
+  const hasSource =
+    sourceMode === "url"
+      ? Boolean(url.trim())
+      : sourceMode === "gdrive"
+        ? Boolean(selectedDriveFileId)
+        : Boolean(uploadFileName);
+  const isStartDisabled =
+    isSubmitting ||
+    isBusy ||
+    isUploading ||
+    !hasSource ||
+    (sourceMode === "gdrive" && driveAutoUpload && !selectedDriveFolderId);
   const isProcessing = isSubmitting || isBusy;
 
   return (
@@ -131,20 +171,27 @@ export function ControlPanel({
 
       <div className="segmentedField">
         <span>Sumber Video</span>
-        <div className="segmentedControl" role="group" aria-label="Sumber video">
+        <div className="segmentedControl segmentedControl--three" role="group" aria-label="Sumber video">
           <button
             className={sourceMode === "url" ? "active" : ""}
             type="button"
             onClick={() => onSourceModeChange("url")}
           >
-            <Link2 size={15} /> Link YouTube
+            <Link2 size={15} /> YouTube
           </button>
           <button
             className={sourceMode === "upload" ? "active" : ""}
             type="button"
             onClick={() => onSourceModeChange("upload")}
           >
-            <Upload size={15} /> Upload Video
+            <Upload size={15} /> Upload
+          </button>
+          <button
+            className={sourceMode === "gdrive" ? "active" : ""}
+            type="button"
+            onClick={() => onSourceModeChange("gdrive")}
+          >
+            <HardDrive size={15} /> Drive
           </button>
         </div>
       </div>
@@ -159,7 +206,7 @@ export function ControlPanel({
           />
           <p className="field-help">Pastikan video memiliki percakapan yang jelas untuk hasil transkripsi terbaik.</p>
         </label>
-      ) : (
+      ) : sourceMode === "upload" ? (
         <label className="field wide">
           <span>Upload File Video</span>
           <input
@@ -178,6 +225,23 @@ export function ControlPanel({
             <video className="uploadPreview" src={uploadPreviewUrl} controls preload="metadata" />
           ) : null}
         </label>
+      ) : (
+        <DriveSource
+          status={driveStatus}
+          files={driveFiles}
+          folders={driveFolders}
+          selectedFileId={selectedDriveFileId}
+          selectedFolderId={selectedDriveFolderId}
+          autoUpload={driveAutoUpload}
+          isLoading={isDriveLoading}
+          isConnecting={isDriveConnecting}
+          onConnect={onConnectDrive}
+          onDisconnect={onDisconnectDrive}
+          onRefresh={onRefreshDrive}
+          onSelectFile={onSelectDriveFile}
+          onSelectFolder={onSelectDriveFolder}
+          onAutoUploadChange={onDriveAutoUploadChange}
+        />
       )}
 
       <div className="gridFields">

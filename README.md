@@ -101,6 +101,8 @@ GET    /outputs/<generated-file>
 | `CLIPFORGE_COMPUTE` | Backend | `modal` (default) or `local` |
 | `MODAL_GPU_BASE_URL` | Backend | Deployed Modal GPU web URL |
 | `MODAL_PROXY_KEY` / `MODAL_PROXY_SECRET` | Backend | Modal proxy auth for GPU endpoints |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Backend | OAuth client for Google Drive |
+| `GOOGLE_OAUTH_REDIRECT_URI` | Backend | Must match the Cloud Console redirect URI |
 | `CLIPFORGE_WHISPER_DEVICE` | GPU worker | `cuda` on Modal, `cpu` locally |
 | `CLIPFORGE_VIDEO_ENCODER` | GPU worker | `h264_nvenc` on Modal, `libx264` locally |
 
@@ -146,6 +148,25 @@ Endpoints on the GPU app:
 If `MODAL_GPU_BASE_URL` is empty, the backend **falls back to local CPU** so the UI still runs without Modal credentials. Set `CLIPFORGE_COMPUTE=local` to force that path.
 
 On the GPU worker, Whisper uses `device=cuda` and FFmpeg prefers NVENC. Face/person crop and subtitle burn run in the same Modal job.
+
+## Google Drive
+
+Use Drive as a source next to YouTube and local upload.
+
+1. Create a Google Cloud OAuth **Web** client.
+2. Add authorized redirect URI `http://127.0.0.1:43123/api/drive/callback` (or your public origin).
+3. Set in `.env`:
+
+```env
+GOOGLE_CLIENT_ID=....apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_OAUTH_REDIRECT_URI=http://127.0.0.1:43123/api/drive/callback
+```
+
+4. In the UI, choose **Drive**, connect, pick a video, optionally check **Auto-upload finished clips** and select a destination folder.
+5. After clipping, MP4s remain under local `outputs/` and, if that checkbox is on, are copied to the Drive folder.
+
+Without OAuth credentials, the Drive tab shows setup instructions and YouTube/upload keep working.
 
 ## Safety and legal notes
 

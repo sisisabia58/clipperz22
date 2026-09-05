@@ -13,6 +13,9 @@ services:
       MODAL_PROXY_SECRET: ${MODAL_PROXY_SECRET:-}
       MODAL_TOKEN_ID: ${MODAL_TOKEN_ID:-}
       MODAL_TOKEN_SECRET: ${MODAL_TOKEN_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_OAUTH_REDIRECT_URI: ${GOOGLE_OAUTH_REDIRECT_URI:-http://127.0.0.1:43123/api/drive/callback}
     volumes:
       - clipforge-data:/app/data
       - clipforge-models:/root/.cache

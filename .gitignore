@@ -8,6 +8,7 @@ backend/outputs/
 backend/uploads/
 backend/jobs.json
 backend/jobs.json.tmp
+backend/gdrive.json
 backend/__pycache__/
 backend/**/*.py[cod]
 

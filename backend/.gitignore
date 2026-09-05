@@ -6,6 +6,7 @@ __pycache__/
 
 .env
 .env.*
+gdrive.json
 jobs.json
 jobs.json.tmp
 

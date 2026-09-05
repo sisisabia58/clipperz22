@@ -8,7 +8,7 @@ export type CaptionFont =
   | "Liberation Sans"
   | "Liberation Serif"
   | "Noto Sans";
-export type SourceMode = "url" | "upload";
+export type SourceMode = "url" | "upload" | "gdrive";
 
 export type ClipFile = {
   name: string;
@@ -85,4 +85,7 @@ export type CreateClipJobInput = {
   ai_base_url?: string;
   ai_model?: string;
   ai_api_key?: string;
+  drive_file_id?: string;
+  drive_upload?: boolean;
+  drive_folder_id?: string;
 };

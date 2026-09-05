@@ -13,10 +13,11 @@ from math import ceil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from compute import compute_backend, should_dispatch_to_modal, whisper_runtime
@@ -63,6 +64,9 @@ class ClipJobRequest(BaseModel):
     ai_base_url: str = ""
     ai_model: str = ""
     ai_api_key: str = ""
+    drive_file_id: str = ""
+    drive_upload: bool = False
+    drive_folder_id: str = ""
 
     @field_validator("caption_color", "caption_outline_color")
     @classmethod
@@ -206,6 +210,7 @@ def clear_uploads_dir() -> int:
 jobs: dict[str, ClipJob] = load_jobs()
 jobs_lock = threading.Lock()
 job_secrets: dict[str, str] = {}
+drive_oauth_states: dict[str, float] = {}
 
 
 def clip_url(path: Path) -> str:
@@ -390,9 +395,50 @@ def build_clipper_command(request: ClipJobRequest) -> list[str]:
     return command
 
 
+def upload_clips_to_drive(
+    request: ClipJobRequest,
+    clips: list[ClipFile],
+    logs: list[str],
+    client=None,
+    outputs_dir: Path | None = None,
+) -> list[str]:
+    if not request.drive_upload:
+        return logs
+
+    folder_id = request.drive_folder_id.strip()
+    drive = client
+    if drive is None:
+        from gdrive import DriveClient
+
+        drive = DriveClient()
+    if not folder_id:
+        settings = drive.load_settings()
+        folder_id = settings.folder_id
+    if not folder_id:
+        logs.append("Google Drive upload skipped: no destination folder selected.")
+        return logs
+
+    root = outputs_dir or OUTPUTS_DIR
+    uploaded = 0
+    for clip in clips:
+        relative = unquote(clip.url.removeprefix("/outputs/").lstrip("/"))
+        local_path = root / relative
+        if not local_path.is_file():
+            logs.append(f"Google Drive upload skipped missing file: {clip.name}")
+            continue
+        drive.upload_file(local_path, folder_id, clip.name)
+        uploaded += 1
+        logs.append(f"Uploaded {clip.name} to Google Drive.")
+    if uploaded:
+        logs.append(f"Saved {uploaded} clip(s) to Google Drive and local disk.")
+    return logs
+
+
 def finish_job(job_id: str, request: ClipJobRequest, started_at: float, logs: list[str], error: str | None = None) -> None:
     clips = discover_clips(started_at)
     candidates = discover_candidates(started_at)
+    if not error:
+        logs = upload_clips_to_drive(request, clips, logs)
     if error:
         set_job(
             job_id,
@@ -500,6 +546,140 @@ def health() -> dict[str, str | dict[str, str]]:
     }
 
 
+class DriveImportBody(BaseModel):
+    file_id: str
+
+
+class DriveSettingsBody(BaseModel):
+    folder_id: str = ""
+    folder_name: str = ""
+    auto_upload: bool = False
+
+
+def _drive_client():
+    from gdrive import DriveClient
+
+    return DriveClient()
+
+
+@app.get("/api/drive/status")
+def drive_status() -> dict[str, str | bool]:
+    client = _drive_client()
+    token = client.load_token()
+    settings = client.load_settings()
+    return {
+        "configured": client.configured(),
+        "connected": client.connected(),
+        "email": token.email,
+        "folder_id": settings.folder_id,
+        "folder_name": settings.folder_name,
+        "auto_upload": settings.auto_upload,
+    }
+
+
+@app.get("/api/drive/auth-url")
+def drive_auth_url() -> dict[str, str]:
+    from gdrive import DriveError
+
+    client = _drive_client()
+    try:
+        state = uuid.uuid4().hex
+        drive_oauth_states[state] = time.time()
+        return {"url": client.authorization_url(state)}
+    except DriveError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/drive/callback")
+def drive_callback(code: str = "", state: str = "", error: str = "") -> RedirectResponse:
+    from gdrive import DriveError
+
+    if error or not code:
+        return RedirectResponse("/?drive=error", status_code=302)
+    issued = drive_oauth_states.pop(state, None)
+    if not issued or time.time() - issued > 600:
+        return RedirectResponse("/?drive=invalid", status_code=302)
+    try:
+        _drive_client().exchange_code(code)
+    except DriveError:
+        return RedirectResponse("/?drive=error", status_code=302)
+    return RedirectResponse("/?drive=connected", status_code=302)
+
+
+@app.post("/api/drive/disconnect")
+def drive_disconnect() -> dict[str, str]:
+    _drive_client().clear()
+    return {"status": "ok"}
+
+
+@app.get("/api/drive/files")
+def drive_files() -> dict[str, list[dict[str, str]]]:
+    from gdrive import DriveError
+
+    try:
+        files = _drive_client().list_videos()
+    except DriveError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return {
+        "files": [
+            {
+                "id": item.id,
+                "name": item.name,
+                "mime_type": item.mime_type,
+                "size": item.size,
+                "thumbnail": item.thumbnail,
+            }
+            for item in files
+        ]
+    }
+
+
+@app.get("/api/drive/folders")
+def drive_folders() -> dict[str, list[dict[str, str]]]:
+    from gdrive import DriveError
+
+    try:
+        folders = _drive_client().list_folders()
+    except DriveError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return {"folders": [{"id": item.id, "name": item.name} for item in folders]}
+
+
+@app.post("/api/drive/import")
+def drive_import(body: DriveImportBody) -> dict[str, str | float | None]:
+    from gdrive import DriveError
+
+    if not body.file_id.strip():
+        raise HTTPException(status_code=400, detail="Select a Google Drive video first")
+    try:
+        imported = _drive_client().import_video(body.file_id.strip(), UPLOADS_DIR)
+    except DriveError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    target = UPLOADS_DIR / imported.source_file
+    return {
+        "source_file": imported.source_file,
+        "original_name": imported.original_name,
+        "duration": probe_media_duration(target),
+    }
+
+
+@app.post("/api/drive/settings")
+def drive_settings(body: DriveSettingsBody) -> dict[str, str | bool]:
+    from gdrive import DriveSettings
+
+    settings = DriveSettings(
+        folder_id=body.folder_id.strip(),
+        folder_name=body.folder_name.strip(),
+        auto_upload=body.auto_upload,
+    )
+    _drive_client().save_settings(settings)
+    return {
+        "folder_id": settings.folder_id,
+        "folder_name": settings.folder_name,
+        "auto_upload": settings.auto_upload,
+    }
+
+
 class ModelsQuery(BaseModel):
     base_url: str = ""
     api_key: str = ""
@@ -568,8 +748,17 @@ def create_job(request: ClipJobRequest) -> ClipJob:
     if request.max_duration <= request.min_duration:
         raise HTTPException(status_code=400, detail="max_duration must be greater than min_duration")
 
-    if not request.url and not request.source_file:
-        raise HTTPException(status_code=400, detail="Provide a YouTube URL or upload a video first")
+    if not request.url and not request.source_file and not request.drive_file_id:
+        raise HTTPException(status_code=400, detail="Provide a YouTube URL, Google Drive video, or upload a video first")
+
+    if request.drive_file_id and not request.source_file:
+        from gdrive import DriveClient, DriveError
+
+        try:
+            imported = DriveClient().import_video(request.drive_file_id, UPLOADS_DIR)
+        except DriveError as exc:
+            raise HTTPException(status_code=502, detail=f"Google Drive import failed: {exc}") from exc
+        request = request.model_copy(update={"source_file": imported.source_file})
 
     if request.source_file:
         upload_path = resolve_upload_path(request.source_file)

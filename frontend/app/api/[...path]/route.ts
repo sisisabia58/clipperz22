@@ -16,16 +16,22 @@ const proxyRequest = async (request: NextRequest, path: string[]) => {
     headers: {
       "content-type": request.headers.get("content-type") ?? "application/json",
     },
-    // Forward the raw bytes; decoding as text corrupts binary uploads.
     body: isBodyless ? undefined : await request.arrayBuffer(),
     cache: "no-store",
+    redirect: "manual",
   });
+
+  const headers = new Headers();
+  headers.set("content-type", response.headers.get("content-type") ?? "application/json");
+  const location = response.headers.get("location");
+  if (location) {
+    const dest = new URL(location, request.nextUrl.origin);
+    headers.set("location", `${dest.pathname}${dest.search}`);
+  }
 
   return new Response(response.body, {
     status: response.status,
-    headers: {
-      "content-type": response.headers.get("content-type") ?? "application/json",
-    },
+    headers,
   });
 };
 

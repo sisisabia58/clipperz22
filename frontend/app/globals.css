@@ -1083,10 +1083,76 @@ h2 {
   overflow-y: auto;
 }
 
-.segmentedControl--grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
+.segmentedControl--three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.segmentedControl--three button {
+  font-size: 12px;
+  padding: 0 6px;
+}
+
+.driveBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.driveAccount {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.driveAccountActions {
+  display: flex;
+  gap: 8px;
+}
+
+.driveList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.driveRow {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: #FFFFFF;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.driveRow:hover {
+  border-color: #BFDBFE;
+  background: #EFF6FF;
+}
+
+.driveRow.selected {
+  border-color: var(--primary);
+  background: #EFF6FF;
+  color: var(--primary);
+}
+
+.driveRowName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .fontSlider {
