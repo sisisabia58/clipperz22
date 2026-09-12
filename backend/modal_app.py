@@ -187,9 +187,8 @@ def execute_clip_job(job_payload: dict) -> bytes:
 
 
 @app.function(
-    gpu="L4",
-    timeout=60 * MINUTES,
-    memory=16384,
+    timeout=10 * MINUTES,
+    memory=1024,
     scaledown_window=5 * MINUTES,
 )
 @modal.asgi_app(requires_proxy_auth=True)
@@ -197,28 +196,9 @@ def web():
     from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import Response
     from modal.functions import FunctionCall
-    from pydantic import BaseModel, Field
+    from pydantic import BaseModel
 
-    from clipper import (
-        CaptionStyle,
-        ClipCandidate,
-        export_clip,
-        transcribe,
-    )
-
-    _prepare_app_root()
-
-    api = FastAPI(title="ClipForge GPU", version="0.1.0")
-
-    class TranscribeRequest(BaseModel):
-        audio_b64: str
-        model: str = "Systran/faster-whisper-small"
-        language: str = "id"
-
-    class EncodeRequest(BaseModel):
-        video_b64: str
-        clip: dict
-        options: dict = Field(default_factory=dict)
+    api = FastAPI(title="ClipForge GPU Router", version="0.1.0")
 
     class JobRequest(BaseModel):
         request: dict
@@ -229,64 +209,11 @@ def web():
     def health() -> dict[str, str | bool]:
         return {
             "status": "ok",
-            "gpu": True,
-            "whisper_device": os.environ.get("CLIPFORGE_WHISPER_DEVICE", "cuda"),
-            "video_encoder": os.environ.get("CLIPFORGE_VIDEO_ENCODER", "h264_nvenc"),
+            "gpu": False,
+            "role": "router",
+            "worker": "execute_clip_job",
+            "worker_gpu": True,
         }
-
-    @api.post("/transcribe")
-    async def transcribe_endpoint(request: Request) -> dict:
-        payload = TranscribeRequest.model_validate(await request.json())
-        with tempfile.TemporaryDirectory() as tmp:
-            work = Path(tmp)
-            audio_path = _write_b64(work / "audio.wav", payload.audio_b64)
-            transcript_path = work / "transcript.json"
-            segments = transcribe(audio_path, transcript_path, payload.model, payload.language, force=True)
-            return {
-                "segments": [
-                    {"start": item.start, "end": item.end, "text": item.text}
-                    for item in segments
-                ]
-            }
-
-    @api.post("/encode")
-    async def encode_endpoint(request: Request) -> Response:
-        payload = EncodeRequest.model_validate(await request.json())
-        with tempfile.TemporaryDirectory() as tmp:
-            work = Path(tmp)
-            video_path = _write_b64(work / "source.mp4", payload.video_b64)
-            clip = ClipCandidate(
-                index=int(payload.clip.get("index") or 1),
-                start=float(payload.clip["start"]),
-                end=float(payload.clip["end"]),
-                duration=float(payload.clip.get("duration") or (float(payload.clip["end"]) - float(payload.clip["start"]))),
-                score=int(payload.clip.get("score") or 0),
-                title=str(payload.clip.get("title") or "clip"),
-                reason=str(payload.clip.get("reason") or ""),
-                text=str(payload.clip.get("text") or ""),
-            )
-            options = payload.options
-            caption = CaptionStyle(
-                font_size=int(options.get("caption_font_size") or 30),
-                position=options.get("caption_position") or "center",
-                color=options.get("caption_color") or "#FFFFFF",
-                font_family=options.get("caption_font") or "DejaVu Sans",
-                outline_width=float(options.get("caption_outline") or 2),
-                outline_color=options.get("caption_outline_color") or "#000000",
-            )
-            out = export_clip(
-                video_path,
-                clip,
-                [],
-                work / "clips",
-                bool(options.get("burn_subtitles", True)),
-                options.get("crop_mode") or "center",
-                caption,
-                None,
-                options.get("cam_corner") or "auto",
-                options.get("required_hashtags") or [],
-            )
-            return Response(content=out.read_bytes(), media_type="video/mp4")
 
     @api.post("/jobs")
     async def jobs_start(request: Request) -> dict[str, str]:
