@@ -54,6 +54,7 @@ image = (
     )
     .env(
         {
+            "PYTHONPATH": "/app",
             "CLIPFORGE_COMPUTE": "local",
             "CLIPFORGE_WHISPER_DEVICE": "cuda",
             "CLIPFORGE_WHISPER_COMPUTE_TYPE": "float16",
@@ -96,11 +97,16 @@ def _zip_directory(root: Path) -> bytes:
 )
 @modal.asgi_app(requires_proxy_auth=True)
 def web():
+    import sys
+
     from fastapi import FastAPI, HTTPException
     from fastapi.responses import Response
     from pydantic import BaseModel, Field
 
-    os.chdir("/app")
+    app_root = "/app"
+    os.chdir(app_root)
+    if app_root not in sys.path:
+        sys.path.insert(0, app_root)
 
     from clipper import (
         CaptionStyle,
