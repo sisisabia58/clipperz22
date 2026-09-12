@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -89,6 +90,102 @@ def _zip_directory(root: Path) -> bytes:
     return buffer.getvalue()
 
 
+def _prepare_app_root() -> None:
+    app_root = "/app"
+    os.chdir(app_root)
+    if app_root not in sys.path:
+        sys.path.insert(0, app_root)
+
+
+def _run_clip_job(job_payload: dict) -> bytes:
+    import clipper as clipper_mod
+
+    _prepare_app_root()
+
+    request = job_payload.get("request") or {}
+    source_b64 = job_payload.get("source_b64")
+    source_name = str(job_payload.get("source_name") or "upload.mp4")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        work_root = Path(tmp) / "outputs"
+        work_root.mkdir(parents=True, exist_ok=True)
+        argv = [
+            "clipper.py",
+            "--output",
+            str(work_root),
+            "--top",
+            str(request.get("top") or 3),
+            "--min",
+            str(request.get("min_duration") or 35),
+            "--max",
+            str(request.get("max_duration") or 180),
+            "--model",
+            str(request.get("model") or "Systran/faster-whisper-small"),
+            "--language",
+            str(request.get("language") or "id"),
+            "--crop-mode",
+            str(request.get("crop_mode") or "center"),
+            "--cam-corner",
+            str(request.get("cam_corner") or "auto"),
+            "--caption-font-size",
+            str(request.get("caption_font_size") or 30),
+            "--caption-position",
+            str(request.get("caption_position") or "center"),
+            "--caption-color",
+            str(request.get("caption_color") or "#FFFFFF"),
+            "--caption-font",
+            str(request.get("caption_font") or "DejaVu Sans"),
+            "--caption-outline",
+            str(request.get("caption_outline") or 2),
+            "--caption-outline-color",
+            str(request.get("caption_outline_color") or "#000000"),
+        ]
+        if request.get("analyze_seconds"):
+            argv.extend(["--analyze-seconds", str(request["analyze_seconds"])])
+        if not request.get("burn_subtitles", True):
+            argv.append("--no-burn-subtitles")
+        hashtags = request.get("required_hashtags") or []
+        if hashtags:
+            argv.extend(["--required-hashtags", ",".join(hashtags)])
+        if request.get("ai_enabled"):
+            argv.append("--ai-enabled")
+            if request.get("ai_base_url"):
+                argv.extend(["--ai-base-url", request["ai_base_url"]])
+            if request.get("ai_model"):
+                argv.extend(["--ai-model", request["ai_model"]])
+            if request.get("ai_api_key"):
+                argv.extend(["--ai-api-key", request["ai_api_key"]])
+
+        if source_b64:
+            source_path = work_root / source_name
+            _write_b64(source_path, source_b64)
+            argv.extend(["--source-file", str(source_path)])
+        elif request.get("url"):
+            argv.insert(1, request["url"])
+        else:
+            raise ValueError("Provide a YouTube URL or uploaded video")
+
+        old_argv = sys.argv
+        try:
+            sys.argv = argv
+            code = clipper_mod.main()
+        finally:
+            sys.argv = old_argv
+        if code != 0:
+            raise RuntimeError(f"clipper.py exited with code {code}")
+        return _zip_directory(work_root)
+
+
+@app.function(
+    gpu="L4",
+    timeout=60 * MINUTES,
+    memory=16384,
+    scaledown_window=5 * MINUTES,
+)
+def execute_clip_job(job_payload: dict) -> bytes:
+    return _run_clip_job(job_payload)
+
+
 @app.function(
     gpu="L4",
     timeout=60 * MINUTES,
@@ -97,16 +194,10 @@ def _zip_directory(root: Path) -> bytes:
 )
 @modal.asgi_app(requires_proxy_auth=True)
 def web():
-    import sys
-
-    from fastapi import FastAPI, HTTPException
+    from fastapi import FastAPI, HTTPException, Request
     from fastapi.responses import Response
+    from modal.functions import FunctionCall
     from pydantic import BaseModel, Field
-
-    app_root = "/app"
-    os.chdir(app_root)
-    if app_root not in sys.path:
-        sys.path.insert(0, app_root)
 
     from clipper import (
         CaptionStyle,
@@ -114,6 +205,8 @@ def web():
         export_clip,
         transcribe,
     )
+
+    _prepare_app_root()
 
     api = FastAPI(title="ClipForge GPU", version="0.1.0")
 
@@ -142,7 +235,8 @@ def web():
         }
 
     @api.post("/transcribe")
-    def transcribe_endpoint(payload: TranscribeRequest) -> dict:
+    async def transcribe_endpoint(request: Request) -> dict:
+        payload = TranscribeRequest.model_validate(await request.json())
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             audio_path = _write_b64(work / "audio.wav", payload.audio_b64)
@@ -156,7 +250,8 @@ def web():
             }
 
     @api.post("/encode")
-    def encode_endpoint(payload: EncodeRequest) -> Response:
+    async def encode_endpoint(request: Request) -> Response:
+        payload = EncodeRequest.model_validate(await request.json())
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             video_path = _write_b64(work / "source.mp4", payload.video_b64)
@@ -194,79 +289,23 @@ def web():
             return Response(content=out.read_bytes(), media_type="video/mp4")
 
     @api.post("/jobs")
-    def jobs_endpoint(payload: JobRequest) -> Response:
-        import clipper as clipper_mod
+    async def jobs_start(request: Request) -> dict[str, str]:
+        payload = JobRequest.model_validate(await request.json())
+        try:
+            call = execute_clip_job.spawn(payload.model_dump())
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Failed to queue GPU job: {exc}") from exc
+        return {"call_id": call.object_id, "status": "running"}
 
-        request = payload.request
-        with tempfile.TemporaryDirectory() as tmp:
-            work_root = Path(tmp) / "outputs"
-            work_root.mkdir(parents=True, exist_ok=True)
-            argv = [
-                "clipper.py",
-                "--output",
-                str(work_root),
-                "--top",
-                str(request.get("top") or 3),
-                "--min",
-                str(request.get("min_duration") or 35),
-                "--max",
-                str(request.get("max_duration") or 180),
-                "--model",
-                str(request.get("model") or "Systran/faster-whisper-small"),
-                "--language",
-                str(request.get("language") or "id"),
-                "--crop-mode",
-                str(request.get("crop_mode") or "center"),
-                "--cam-corner",
-                str(request.get("cam_corner") or "auto"),
-                "--caption-font-size",
-                str(request.get("caption_font_size") or 30),
-                "--caption-position",
-                str(request.get("caption_position") or "center"),
-                "--caption-color",
-                str(request.get("caption_color") or "#FFFFFF"),
-                "--caption-font",
-                str(request.get("caption_font") or "DejaVu Sans"),
-                "--caption-outline",
-                str(request.get("caption_outline") or 2),
-                "--caption-outline-color",
-                str(request.get("caption_outline_color") or "#000000"),
-            ]
-            if request.get("analyze_seconds"):
-                argv.extend(["--analyze-seconds", str(request["analyze_seconds"])])
-            if not request.get("burn_subtitles", True):
-                argv.append("--no-burn-subtitles")
-            hashtags = request.get("required_hashtags") or []
-            if hashtags:
-                argv.extend(["--required-hashtags", ",".join(hashtags)])
-            if request.get("ai_enabled"):
-                argv.append("--ai-enabled")
-                if request.get("ai_base_url"):
-                    argv.extend(["--ai-base-url", request["ai_base_url"]])
-                if request.get("ai_model"):
-                    argv.extend(["--ai-model", request["ai_model"]])
-                if request.get("ai_api_key"):
-                    argv.extend(["--ai-api-key", request["ai_api_key"]])
-
-            if payload.source_b64:
-                source_path = work_root / payload.source_name
-                _write_b64(source_path, payload.source_b64)
-                argv.extend(["--source-file", str(source_path)])
-            elif request.get("url"):
-                argv.insert(1, request["url"])
-            else:
-                raise HTTPException(status_code=400, detail="Provide a YouTube URL or uploaded video")
-
-            import sys
-
-            old_argv = sys.argv
-            try:
-                sys.argv = argv
-                code = clipper_mod.main()
-            finally:
-                sys.argv = old_argv
-            if code != 0:
-                raise HTTPException(status_code=500, detail=f"clipper.py exited with code {code}")
-            return Response(content=_zip_directory(work_root), media_type="application/zip")
+    @api.get("/jobs/{call_id}")
+    async def jobs_poll(call_id: str):
+        fc = FunctionCall.from_id(call_id)
+        try:
+            result = await fc.get(timeout=0)
+        except TimeoutError:
+            return {"call_id": call_id, "status": "running"}
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return Response(content=result, media_type="application/zip")
 
     return api

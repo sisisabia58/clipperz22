@@ -67,16 +67,66 @@ def test_run_job_writes_returned_archive_into_output_dir(tmp_path: Path):
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("demo/clips/clip_01_test.mp4", b"clip")
         archive.writestr("demo/candidates.json", b"[]")
-    transport = FakeTransport()
-    transport.response_body = buffer.getvalue()
-    transport.response_content_type = "application/zip"
-    client = ModalGPUClient("https://clipforge.modal.run", transport=transport)
+
+    class QueueTransport(FakeTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.responses = [
+                (200, {"content-type": "application/json"}, b'{"call_id":"fc-test","status":"running"}'),
+                (200, {"content-type": "application/zip"}, buffer.getvalue()),
+            ]
+
+        def request(self, method, url, headers, body=None):
+            self.calls.append({"method": method, "url": url, "headers": headers, "body": body})
+            status, response_headers, response_body = self.responses.pop(0)
+            return status, response_headers, response_body
+
+    transport = QueueTransport()
+    client = ModalGPUClient("https://clipforge.modal.run", transport=transport, poll_interval=0)
 
     extracted = client.run_job({"url": "https://youtu.be/x"}, output_dir=tmp_path)
 
     assert (tmp_path / "demo/clips/clip_01_test.mp4").read_bytes() == b"clip"
     assert extracted.endswith("demo") or (tmp_path / "demo").is_dir()
     assert transport.calls[0]["url"] == "https://clipforge.modal.run/jobs"
+    assert transport.calls[1]["url"] == "https://clipforge.modal.run/jobs/fc-test"
+
+
+def test_run_job_uses_modal_sdk_when_token_is_configured(tmp_path: Path, monkeypatch):
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("demo/clips/clip_01_test.mp4", b"clip")
+
+    class FakeCall:
+        object_id = "fc-test"
+
+        def get(self, timeout=0):
+            assert timeout == 0
+            return buffer.getvalue()
+
+    class FakeFunction:
+        def spawn(self, payload):
+            assert payload["request"]["url"] == "https://youtu.be/x"
+            return FakeCall()
+
+    class FakeModalModule:
+        @staticmethod
+        def Function_from_name(app_name, function_name):
+            assert app_name == "clipforge-gpu"
+            assert function_name == "execute_clip_job"
+            return FakeFunction()
+
+    monkeypatch.setitem(__import__("sys").modules, "modal", FakeModalModule())
+    monkeypatch.setattr(FakeModalModule, "Function", type("Function", (), {"from_name": FakeModalModule.Function_from_name}))
+
+    client = ModalGPUClient(token_id="ak-test", token_secret="as-test", poll_interval=0)
+    extracted = client.run_job({"url": "https://youtu.be/x"}, output_dir=tmp_path)
+
+    assert (tmp_path / "demo/clips/clip_01_test.mp4").read_bytes() == b"clip"
+    assert extracted.endswith("demo") or (tmp_path / "demo").is_dir()
 
 
 def test_client_raises_on_error_status():
