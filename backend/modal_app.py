@@ -49,7 +49,7 @@ image = (
         "python-multipart==0.0.20",
         "python-slugify==8.0.4",
         "rich==15.0.0",
-        "opencv-python-headless>=4.10.0",
+        "opencv-python-headless>=4.10.0,<5",
         "uvicorn==0.38.0",
         "yt-dlp==2026.6.9",
     )

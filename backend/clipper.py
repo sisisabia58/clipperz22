@@ -160,8 +160,10 @@ def detect_person_focus_x(video_path: Path, clip: ClipCandidate) -> tuple[float,
         step = duration / (sample_count + 1)
         offsets = [step * (index + 1) for index in range(sample_count)]
 
-    hog = cv2.HOGDescriptor()
-    hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+    hog = None
+    if hasattr(cv2, "HOGDescriptor") and hasattr(cv2, "HOGDescriptor_getDefaultPeopleDetector"):
+        hog = cv2.HOGDescriptor()
+        hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
     face_cascade = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml"))
     profile_cascade = cv2.CascadeClassifier(str(Path(cv2.data.haarcascades) / "haarcascade_profileface.xml"))
     yunet = None
@@ -230,16 +232,17 @@ def detect_person_focus_x(video_path: Path, clip: ClipCandidate) -> tuple[float,
             center_x = (original_x + w / 2) / resize_scale
             face_detections.append((center_x, max(w, h) / resize_scale, 1.8))
 
-        people, weights = hog.detectMultiScale(
-            resized,
-            winStride=(8, 8),
-            padding=(16, 16),
-            scale=1.05,
-        )
-        for index, (x, _, w, _) in enumerate(people):
-            confidence = float(weights[index]) if len(weights) > index else 1.0
-            center_x = (x + w / 2) / resize_scale
-            person_detections.append((center_x, w / resize_scale, max(0.25, confidence)))
+        if hog is not None:
+            people, weights = hog.detectMultiScale(
+                resized,
+                winStride=(8, 8),
+                padding=(16, 16),
+                scale=1.05,
+            )
+            for index, (x, _, w, _) in enumerate(people):
+                confidence = float(weights[index]) if len(weights) > index else 1.0
+                center_x = (x + w / 2) / resize_scale
+                person_detections.append((center_x, w / resize_scale, max(0.25, confidence)))
 
         if face_detections:
             center_x, box_width, confidence = max(face_detections, key=lambda item: item[1] * item[2])
